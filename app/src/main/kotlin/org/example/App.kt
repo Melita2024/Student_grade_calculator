@@ -3,6 +3,7 @@
  */
 package org.example
 
+import org.apache.poi.ss.usermodel.CellType
 import org.apache.poi.xssf.usermodel.XSSFWorkbook
 import java.io.File
 import java.io.FileInputStream
@@ -37,62 +38,49 @@ class StudentGradeCalculator(private val inputFile: String) {
     }
 
     private fun readExcelFile(): List<StudentRecord> {
-        val records = mutableListOf<StudentRecord>()
-        
         FileInputStream(inputFile).use { fis ->
-            val workbook = XSSFWorkbook(fis)
-            val sheet = workbook.getSheetAt(0)
-            
-            var rowIndex = 0
-            for (row in sheet) {
-                rowIndex++
-                
-                // Skip header row (first row)
-                if (rowIndex == 1) continue
-                
-                val nameCell = row.getCell(0)
-                val scoreCell = row.getCell(1)
-                
-                val name = nameCell?.stringCellValue?.trim() ?: ""
-                var score: Double? = null
-                var isValid = true
-                
-                // Validate and extract score
-                if (name.isEmpty()) {
-                    isValid = false
-                } else if (scoreCell == null || scoreCell.cellType == org.apache.poi.ss.usermodel.CellType.BLANK) {
-                    isValid = false
-                } else {
-                    try {
-                        score = when (scoreCell.cellType) {
-                            org.apache.poi.ss.usermodel.CellType.NUMERIC -> scoreCell.numericCellValue
-                            org.apache.poi.ss.usermodel.CellType.STRING -> {
-                                val scoreStr = scoreCell.stringCellValue.trim()
-                                scoreStr.toDouble()
-                            }
-                            else -> {
-                                isValid = false
-                                null
-                            }
-                        }
-                        
-                        if (score != null && (score < 0 || score > 100)) {
+            XSSFWorkbook(fis).use { workbook ->
+                val sheet = workbook.getSheetAt(0)
+
+                return sheet
+                    .filterIndexed { index, _ -> index > 0 } // Skip header row
+                    .map { row ->
+                        val nameCell = row.getCell(0)
+                        val scoreCell = row.getCell(1)
+
+                        val name = nameCell?.stringCellValue?.trim() ?: ""
+                        var score: Double? = null
+                        var isValid = true
+
+                        if (name.isEmpty()) {
                             isValid = false
-                            score = null
+                        } else if (scoreCell == null || scoreCell.cellType == CellType.BLANK) {
+                            isValid = false
+                        } else {
+                            try {
+                                score = when (scoreCell.cellType) {
+                                    CellType.NUMERIC -> scoreCell.numericCellValue
+                                    CellType.STRING -> scoreCell.stringCellValue.trim().toDouble()
+                                    else -> {
+                                        isValid = false
+                                        null
+                                    }
+                                }
+
+                                if (score != null && (score < 0 || score > 100)) {
+                                    isValid = false
+                                    score = null
+                                }
+                            } catch (_: Exception) {
+                                isValid = false
+                            }
                         }
-                    } catch (e: Exception) {
-                        isValid = false
+
+                        val grade = if (isValid && score != null) assignGrade(score) else "Invalid"
+                        StudentRecord(name.ifEmpty { "Unknown" }, score, grade)
                     }
-                }
-                
-                val grade = if (isValid && score != null) assignGrade(score) else "Invalid"
-                records.add(StudentRecord(name.ifEmpty { "Unknown" }, score, grade))
             }
-            
-            workbook.close()
         }
-        
-        return records
     }
 
     private fun assignGrade(score: Double): String {
@@ -108,7 +96,7 @@ class StudentGradeCalculator(private val inputFile: String) {
     private fun writeExcelFile(students: List<StudentRecord>) {
         XSSFWorkbook().use { workbook ->
             val sheet = workbook.createSheet("Grades")
-            
+
             // Create header row
             val headerRow = sheet.createRow(0)
             headerRow.createCell(0).setCellValue("Name")
@@ -120,14 +108,13 @@ class StudentGradeCalculator(private val inputFile: String) {
             val headerFont = workbook.createFont()
             headerFont.bold = true
             headerStyle.setFont(headerFont)
-            for (i in 0..2) {
-                headerRow.getCell(i).cellStyle = headerStyle
-            }
-            
-            // Write data rows
-            var rowIndex = 1
-            for (student in students) {
-                val row = sheet.createRow(rowIndex++)
+            (0..2)
+                .map(headerRow::getCell)
+                .filterNotNull()
+                .forEach { it.cellStyle = headerStyle }
+
+            students.forEachIndexed { index, student ->
+                val row = sheet.createRow(index + 1)
                 row.createCell(0).setCellValue(student.name)
                 if (student.score != null) {
                     row.createCell(1).setCellValue(student.score)
@@ -158,14 +145,15 @@ class StudentGradeCalculator(private val inputFile: String) {
         println(String.format("%-25s | %-10s | %-10s", "Name", "Score", "Grade"))
         println("-".repeat(60))
         
-        for (student in students) {
-            val scoreStr = if (student.score != null) String.format("%.2f", student.score) else "N/A"
-            println(String.format("%-25s | %-10s | %-10s", student.name, scoreStr, student.grade))
-        }
-        
+        students
+            .map { student ->
+                val scoreStr = student.score?.let { String.format("%.2f", it) } ?: "N/A"
+                String.format("%-25s | %-10s | %-10s", student.name, scoreStr, student.grade)
+            }
+            .forEach(::println)
+
         println("=".repeat(60))
         
-        // Print statistics
         val validStudents = students.filter { it.score != null }
         if (validStudents.isNotEmpty()) {
             val avgScore = validStudents.map { it.score ?: 0.0 }.average()
